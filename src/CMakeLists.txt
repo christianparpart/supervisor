@@ -1,0 +1,11 @@
+add_definitions(
+  -pthread
+  -DPACKAGE_NAME="${PACKAGE_NAME}"
+  -DPACKAGE_VERSION="${PACKAGE_VERSION}"
+  -DPACKAGE_HOMEPAGE_URL="${PACKAGE_HOMEPAGE_URL}"
+  -DSYSCONFDIR="${SYSCONFDIR}"
+  -DLOGDIR="${LOGDIR}"
+  -DVERSION="${PACKAGE_VERSION}")
+
+add_executable(supervisor supervisor.cpp)
+install(TARGETS supervisor RUNTIME DESTINATION sbin)
