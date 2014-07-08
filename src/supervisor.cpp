@@ -20,6 +20,7 @@
 #include <assert.h>
 #include <getopt.h>
 #include <initializer_list>
+#include <unordered_map>
 #include <vector>
 #include <fstream>
 #include <iostream>
@@ -29,8 +30,8 @@
 // TODO
 // - implement watching child pidfile (--child-pidfile=FILE)
 //   to determine main PID
-// - implement --pidfile=FILE
 // - implement --fork
+// - implement application privilege dropping
 
 // {{{ PidTracker
 class PidTracker {
@@ -232,15 +233,53 @@ Supervisor::Supervisor()
     : program_(nullptr),
       pidfile_(),
       childPidfile_(),
-      restartLimit_(0),    // do not auto-restart
-      restartDelay_(0),    // do not wait during restarts
-      restartOnError_(0),  // boolean
+      restartLimit_(0),  // do not auto-restart
+      restartDelay_(0),  // do not wait during restarts
+      restartOnError_(false),
       fork_(false) {
   assert(self_ == nullptr);
   self_ = this;
 }
 
-Supervisor::~Supervisor() { self_ = nullptr; }
+Supervisor::~Supervisor() {
+  self_ = nullptr;
+
+  if (!pidfile_.empty()) {
+    unlink(pidfile_.c_str());
+  }
+}
+
+bool addSignal(const char* name, std::vector<int>& forwardedSignals) {
+  typedef std::unordered_map<std::string, int> SignalMap;
+
+  static SignalMap map = {// long hand
+                          {"SIGINT", SIGINT},
+                          {"SIGQUIT", SIGQUIT},
+                          {"SIGTERM", SIGTERM},
+                          {"SIGCONT", SIGCONT},
+                          {"SIGUSR1", SIGUSR1},
+                          {"SIGUSR2", SIGUSR2},
+                          {"SIGTTIN", SIGTTIN},
+                          {"SIGTTOU", SIGTTOU},
+                          // short hand
+                          {"INT", SIGINT},
+                          {"QUIT", SIGQUIT},
+                          {"TERM", SIGTERM},
+                          {"CONT", SIGCONT},
+                          {"USR1", SIGUSR1},
+                          {"USR2", SIGUSR2},
+                          {"TTIN", SIGTTIN},
+                          {"TTOU", SIGTTOU}};
+
+  auto i = map.find(name);
+
+  if (i == map.end()) {
+    return false;
+  }
+
+  forwardedSignals.push_back(i->second);
+  return true;
+}
 
 bool Supervisor::parseArgs(int argc, char* argv[]) {
   if (argc <= 1) {
@@ -262,6 +301,9 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
       {"help", no_argument, nullptr, 'h'},
       //.
       {0, 0, 0, 0}};
+
+  std::vector<int> forwardedSignals = {SIGINT, SIGTERM, SIGQUIT,
+                                       SIGHUP, SIGUSR1, SIGUSR2};
 
   for (;;) {
     int long_index = 0;
@@ -287,7 +329,10 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
         printf("restart on error: true\n");
         break;
       case 's':
-        printf("TODO add signal: %s\n", optarg);
+        if (!addSignal(optarg, forwardedSignals)) {
+          printf("supervisor: Unknown signal %s.\n", optarg);
+          return false;
+        }
         break;
       case 'P':
         childPidfile_ = optarg;
@@ -314,6 +359,10 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
         }
 
         program_.reset(new Program(args[0], args));
+
+        for (int sig : forwardedSignals) {
+          signal(sig, &Supervisor::sighandler);
+        }
 
         return true;
       }
@@ -364,11 +413,12 @@ void Supervisor::printHelp() {
 
 int Supervisor::run(int argc, char* argv[]) {
   try {
-    if (!parseArgs(argc, argv)) return 1;
+    if (!parseArgs(argc, argv)) return EXIT_FAILURE;
 
-    printf("Installing signal handler...\n");
-    for (int sig : {SIGINT, SIGTERM, SIGQUIT, SIGHUP, SIGUSR1, SIGUSR2}) {
-      signal(sig, &Supervisor::sighandler);
+    if (!pidfile_.empty()) {
+      printf("supervisor: Writing PID %d to %s.\n", getpid(), pidfile_.c_str());
+      std::ofstream fs(pidfile_, std::ios_base::out | std::ios_base::trunc);
+      fs << getpid() << std::endl;
     }
 
     // if (setsid() < 0) {
@@ -402,7 +452,7 @@ int Supervisor::run(int argc, char* argv[]) {
         }
 
         if (WEXITSTATUS(status) != EXIT_SUCCESS && restartOnError_) {
-          printf("supervisor: Restarting due to error code %d.",
+          printf("supervisor: Restarting due to error code %d.\n",
                  WEXITSTATUS(status));
 
           if (restart()) {
@@ -468,7 +518,7 @@ void Supervisor::sighandler(int signum) {
 
 int main(int argc, char* argv[]) {
   Supervisor supervisor;
-#if !defined(NDEBUG)
+#if 0 // !defined(NDEBUG)
   if (argc == 1) {
     static const char* args[] = {
         argv[0],     "--restart-on-error", "--restart-limit=3", "--",

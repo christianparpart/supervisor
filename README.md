@@ -54,6 +54,13 @@ Examples:
                --no-fork
 ```
 
+### Known Caveats
+
+ * The project is still pretty young, so expect things to break.
+ * Application PID tracking via `cgroups` requires `supervisor` to run
+   as root. But that's not a problem for now as the application is meant to
+   drop root (or get dropped) anyways.
+
 ### License
 
 ```
