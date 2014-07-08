@@ -8,9 +8,7 @@ number of restarts, executable upgrades, and crashes.
 ### Features
 
  * preserves the supervisor-PID over your application for easy tooling with init systems
- * keeps track application PID changes
-   * by a manual hint of `--child-pidfile=PATH`, or
-   * by using Linux Control Groups (cgroups) if available.
+ * keeps track application PID changes by using Linux Control Groups (cgroups).
  * restarts your application on crashes
  * minimalisticly not overbloated with unnecessary features
 
@@ -42,9 +40,6 @@ options:
   -s,--signal=SIGNAL    Adds given signal to the list of signals
                         to forward to the supervised program.
                         Defaults to (INT, TERM, QUIT, USR1, USR2, HUP)
-  -P,--child-pidfile=PATH
-                        Path to the child process' managed PID file.
-                        The supervisor is watching this file for updates.
   -v,--version          Prints program version number and exits
   -h,--help             Prints this help and exits.
 
