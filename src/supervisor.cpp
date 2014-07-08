@@ -28,8 +28,6 @@
 #include <memory>
 
 // TODO
-// - implement watching child pidfile (--child-pidfile=FILE)
-//   to determine main PID
 // - implement --fork
 // - implement application privilege dropping
 
@@ -220,7 +218,6 @@ class Supervisor {  // {{{
   static Supervisor* self_;
   std::unique_ptr<Program> program_;
   std::string pidfile_;
-  std::string childPidfile_;
   int restartLimit_;
   int restartDelay_;
   int restartOnError_;
@@ -232,7 +229,6 @@ Supervisor* Supervisor::self_ = nullptr;
 Supervisor::Supervisor()
     : program_(nullptr),
       pidfile_(),
-      childPidfile_(),
       restartLimit_(0),  // do not auto-restart
       restartDelay_(0),  // do not wait during restarts
       restartOnError_(false),
@@ -294,7 +290,6 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
       {"restart-delay", required_argument, &restartDelay_, 'd'},
       {"restart-on-error", no_argument, &restartOnError_, 'R'},
       {"signal", required_argument, nullptr, 's'},
-      {"child-pidfile", required_argument, nullptr, 'P'},
       //.
       {"version", no_argument, nullptr, 'v'},
       {"copyright", no_argument, nullptr, 'y'},
@@ -307,7 +302,7 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
 
   for (;;) {
     int long_index = 0;
-    switch (getopt_long(argc, argv, "fp:r:d:Rs:P:vh", opts, &long_index)) {
+    switch (getopt_long(argc, argv, "fp:r:d:Rs:vh", opts, &long_index)) {
       case 'f':
         fork_ = true;
         break;
@@ -328,9 +323,6 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
           printf("supervisor: Unknown signal %s.\n", optarg);
           return false;
         }
-        break;
-      case 'P':
-        childPidfile_ = optarg;
         break;
       case 'v':
         printVersion();
@@ -391,9 +383,6 @@ void Supervisor::printHelp() {
       "  -s,--signal=SIGNAL    Adds given signal to the list of signals\n"
       "                        to forward to the supervised program.\n"
       "                        Defaults to (INT, TERM, QUIT, USR1, USR2, HUP)\n"
-      "  -P,--child-pidfile=PATH\n"
-      "                        Path to the child process' managed PID file.\n"
-      "                        The supervisor is watching this file for "
       "updates.\n"
       "  -v,--version          Prints program version number and exits\n"
       "  -h,--help             Prints this help and exits.\n"
