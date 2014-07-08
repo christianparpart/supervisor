@@ -132,7 +132,7 @@ bool Program::start() {
 }
 
 bool Program::restart() {
-  pidTracker_.dump("restart");
+  //pidTracker_.dump("restart");
 
   const auto pids = pidTracker_.get();
   if (!pids.empty()) {
@@ -145,7 +145,7 @@ bool Program::restart() {
 }
 
 bool Program::resume() {
-  pidTracker_.dump("resume");
+  //pidTracker_.dump("resume");
   const auto pids = pidTracker_.get();
   if (pids.empty()) {
     return false;
@@ -173,7 +173,7 @@ bool Program::spawn() {
     pid_ = pid;
     pidTracker_.add(pid);
     printf("supervisor: child pid is %d\n", pid);
-    pidTracker_.dump("spawn");
+    //pidTracker_.dump("spawn");
 
     if (prctl(PR_SET_CHILD_SUBREAPER, 1) < 0) {
       fprintf(stderr, "supervisor: prctl(PR_SET_CHILD_SUBREAPER) failed. %s",
@@ -222,6 +222,8 @@ class Supervisor {  // {{{
   int restartDelay_;
   int restartOnError_;
   bool fork_;
+  bool quit_;
+  int exitCode_;
 };
 
 Supervisor* Supervisor::self_ = nullptr;
@@ -232,7 +234,9 @@ Supervisor::Supervisor()
       restartLimit_(0),  // do not auto-restart
       restartDelay_(0),  // do not wait during restarts
       restartOnError_(false),
-      fork_(false) {
+      fork_(false),
+      quit_(false),
+      exitCode_(0) {
   assert(self_ == nullptr);
   self_ = this;
 }
@@ -352,82 +356,80 @@ void Supervisor::printHelp() {
 }
 
 int Supervisor::run(int argc, char* argv[]) {
-  try {
-    if (!parseArgs(argc, argv)) return EXIT_FAILURE;
+  if (!parseArgs(argc, argv)) {
+    return EXIT_FAILURE;
+  }
 
-    if (!pidfile_.empty()) {
-      printf("supervisor: Writing PID %d to %s.\n", getpid(), pidfile_.c_str());
+  if (!pidfile_.empty()) {
+    printf("supervisor: Writing PID %d to %s.\n", getpid(), pidfile_.c_str());
 
-      std::ofstream fs(pidfile_, std::ios_base::out | std::ios_base::trunc);
-      fs << getpid() << std::endl;
+    std::ofstream fs(pidfile_, std::ios_base::out | std::ios_base::trunc);
+    fs << getpid() << std::endl;
+  }
+
+  // if (setsid() < 0) {
+  //   fprintf(stderr, "Error creating session. %s\n", strerror(errno));
+  //   return EXIT_FAILURE;
+  // }
+
+  // if (setpgrp() < 0) {
+  //   fprintf(stderr, "Error creating process group. %s\n", strerror(errno));
+  //   return EXIT_FAILURE;
+  // }
+
+  program_->start();
+
+  for (;;) {
+    int status = 0;
+    if (waitpid(program_->pid(), &status, 0) < 0) {
+      perror("waitpid");
+      return EXIT_FAILURE;
     }
 
-    // if (setsid() < 0) {
-    //   fprintf(stderr, "Error creating session. %s\n", strerror(errno));
-    //   return EXIT_FAILURE;
-    // }
+    if (WIFEXITED(status)) {
+      exitCode_ = WEXITSTATUS(status);
 
-    // if (setpgrp() < 0) {
-    //   fprintf(stderr, "Error creating process group. %s\n", strerror(errno));
-    //   return EXIT_FAILURE;
-    // }
+      printf(
+          "supervisor: Program PID %d terminated normmally "
+          "with exit code %d\n",
+          program_->pid(), exitCode_);
 
-    program_->start();
-
-    for (;;) {
-      int status = 0;
-      if (waitpid(program_->pid(), &status, 0) < 0) {
-        perror("waitpid");
-        throw EXIT_FAILURE;
+      if (program_->resume()) {
+        printf("supervisor: Reattaching to child PID %d.\n", program_->pid());
+        continue;
       }
 
-      if (WIFEXITED(status)) {
-        printf(
-            "supervisor: Program PID %d terminated normmally "
-            "with exit code %d\n",
-            program_->pid(), WEXITSTATUS(status));
-
-        if (program_->resume()) {
-          printf("supervisor: Reattaching to child PID %d.\n", program_->pid());
-          continue;
-        }
-
-        if (WEXITSTATUS(status) != EXIT_SUCCESS && restartOnError_) {
-          printf("supervisor: Restarting due to error code %d.\n",
-                 WEXITSTATUS(status));
-
-          if (restart()) continue;
-        }
-
-        return WEXITSTATUS(status);
-      }
-
-      if (WIFSIGNALED(status)) {
-        printf("Child %d terminated with signal %s (%d)\n", program_->pid(),
-               strsignal(WTERMSIG(status)), WTERMSIG(status));
+      if (exitCode_ != EXIT_SUCCESS && restartOnError_) {
+        printf("supervisor: Restarting due to error code %d.\n", exitCode_);
 
         if (restart()) continue;
-
-        return EXIT_FAILURE;
       }
 
-      fprintf(stderr,
-              "Child %d terminated (neither normally nor abnormally. "
-              "Status code %d\n",
-              program_->pid(), status);
-
-      if (!restart()) {
-        return EXIT_FAILURE;
-      }
+      return exitCode_;
     }
-  }
-  catch (int exitCode) {
-    return exitCode;
+
+    if (WIFSIGNALED(status)) {
+      printf("Child %d terminated with signal '%s' (%d)\n", program_->pid(),
+             strsignal(WTERMSIG(status)), WTERMSIG(status));
+
+      if (restart()) continue;
+
+      return exitCode_;
+    }
+
+    fprintf(stderr,
+            "Child %d terminated (neither normally nor abnormally. "
+            "Status code %d\n",
+            program_->pid(), status);
+
+    if (restart()) continue;
+
+    return exitCode_;
   }
 }
 
 bool Supervisor::restart() {
-  if (restartLimit_ == 0) {
+  if (quit_ || restartLimit_ == 0) {
     return false;
   }
 
@@ -445,6 +447,10 @@ bool Supervisor::restart() {
 }
 
 void Supervisor::sighandler(int signum) {
+  if (signum == SIGTERM) {
+    self()->quit_ = true;
+  }
+
   if (self()->program_->pid()) {
     printf("Signal %s (%d) received. Forwarding to child PID %d.\n",
            strsignal(signum), signum, self()->program_->pid());
