@@ -31,7 +31,7 @@
 
 // TODO
 // - implement --fork
-// - implement application privilege dropping (--user=S, --group=S)
+// - install SIGSEGV handler to cleanup cgroup dir
 
 class Logger {  // {{{
  public:
@@ -63,7 +63,9 @@ class PidTracker {  // {{{
   ~PidTracker();
 
   void add(int pid);
-  std::vector<int> get();
+  std::vector<int> collectAll();
+  int findMainPID();
+
   void dump(const char* msg);
 };
 
@@ -96,7 +98,7 @@ void PidTracker::add(int pid) {
   close(fd);
 }
 
-std::vector<int> PidTracker::get() {
+std::vector<int> PidTracker::collectAll() {
   std::vector<int> result;
 
   char path[80];
@@ -113,12 +115,43 @@ std::vector<int> PidTracker::get() {
   return result;
 }
 
+pid_t getppid(pid_t pid) {
+  char statfile[64];
+  snprintf(statfile, sizeof(statfile), "/proc/%d/stat", pid);
+  FILE* fp = fopen(statfile, "r");
+  if (!fp) return 0;
+
+  int pid0;
+  char comm[16]; // definitely below 16
+  char state;
+  int ppid;
+
+  fscanf(fp, "%d %s %c %d", &pid0, comm, &state, &ppid);
+
+  //printf("getppid[%d]: %d -> %d\n", getpid(), pid, ppid);
+
+  return ppid;
+}
+
+int PidTracker::findMainPID() {
+  const auto pids = collectAll();
+  std::vector<int> candidates;
+
+  for (int pid : collectAll()) {
+    if (getppid(pid) == getpid()) {
+      //printf("findMainPID: add candidate PID %d\n", pid);
+      candidates.push_back(pid);
+    }
+  }
+
+  return candidates.empty() ? candidates.front() : 0;
+}
+
 void PidTracker::dump(const char* msg) {
   assert(msg && *msg);
   printf("PID tracking dump (%s): ", msg);
 
-  const auto pids = get();
-  for (int pid : pids) {
+  for (int pid : collectAll()) {
     printf(" %d", pid);
   }
   printf("\n");
@@ -175,10 +208,15 @@ bool Program::start() {
 bool Program::restart() {
   // pidTracker_.dump("restart");
 
-  const auto pids = pidTracker_.get();
+  if (pid_t pid = pidTracker_.findMainPID()) {
+    pid_ = pid;
+    return true;
+  }
+
+  const auto pids = pidTracker_.collectAll();
   if (!pids.empty()) {
     pid_ = pids[0];
-    logger_->info("reattaching to child PID %d", pid_);
+    logger_->info("performing hardcore action, and an educated guess");
     return true;
   }
 
@@ -187,7 +225,14 @@ bool Program::restart() {
 
 bool Program::resume() {
   pidTracker_.dump("resume");
-  const auto pids = pidTracker_.get();
+
+  if (pid_t pid = pidTracker_.findMainPID()) {
+    logger_->info("reattaching to child PID %d", pid_);
+    pid_ = pid;
+    return true;
+  }
+
+  const auto pids = pidTracker_.collectAll();
   if (pids.empty()) {
     return false;
   }
