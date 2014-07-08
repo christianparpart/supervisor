@@ -245,38 +245,6 @@ Supervisor::~Supervisor() {
   }
 }
 
-bool addSignal(const char* name, std::vector<int>& forwardedSignals) {
-  typedef std::unordered_map<std::string, int> SignalMap;
-
-  static SignalMap map = {// long hand
-                          {"SIGINT", SIGINT},
-                          {"SIGQUIT", SIGQUIT},
-                          {"SIGTERM", SIGTERM},
-                          {"SIGCONT", SIGCONT},
-                          {"SIGUSR1", SIGUSR1},
-                          {"SIGUSR2", SIGUSR2},
-                          {"SIGTTIN", SIGTTIN},
-                          {"SIGTTOU", SIGTTOU},
-                          // short hand
-                          {"INT", SIGINT},
-                          {"QUIT", SIGQUIT},
-                          {"TERM", SIGTERM},
-                          {"CONT", SIGCONT},
-                          {"USR1", SIGUSR1},
-                          {"USR2", SIGUSR2},
-                          {"TTIN", SIGTTIN},
-                          {"TTOU", SIGTTOU}};
-
-  auto i = map.find(name);
-
-  if (i == map.end()) {
-    return false;
-  }
-
-  forwardedSignals.push_back(i->second);
-  return true;
-}
-
 bool Supervisor::parseArgs(int argc, char* argv[]) {
   if (argc <= 1) {
     printHelp();
@@ -289,7 +257,6 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
       {"restart-limit", required_argument, &restartLimit_, 'r'},
       {"restart-delay", required_argument, &restartDelay_, 'd'},
       {"restart-on-error", no_argument, &restartOnError_, 'R'},
-      {"signal", required_argument, nullptr, 's'},
       //.
       {"version", no_argument, nullptr, 'v'},
       {"copyright", no_argument, nullptr, 'y'},
@@ -297,12 +264,9 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
       //.
       {0, 0, 0, 0}};
 
-  std::vector<int> forwardedSignals = {SIGINT, SIGTERM, SIGQUIT,
-                                       SIGHUP, SIGUSR1, SIGUSR2};
-
   for (;;) {
     int long_index = 0;
-    switch (getopt_long(argc, argv, "fp:r:d:Rs:vh", opts, &long_index)) {
+    switch (getopt_long(argc, argv, "fp:r:d:Rvh", opts, &long_index)) {
       case 'f':
         fork_ = true;
         break;
@@ -317,12 +281,6 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
         break;
       case 'R':
         restartOnError_ = true;
-        break;
-      case 's':
-        if (!addSignal(optarg, forwardedSignals)) {
-          printf("supervisor: Unknown signal %s.\n", optarg);
-          return false;
-        }
         break;
       case 'v':
         printVersion();
@@ -346,7 +304,10 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
 
         program_.reset(new Program(args[0], args));
 
-        for (int sig : forwardedSignals) {
+        auto signals = {SIGINT,  SIGQUIT, SIGTERM, SIGCONT,
+                        SIGUSR1, SIGUSR2, SIGTTIN, SIGTTOU};
+
+        for (int sig : signals) {
           signal(sig, &Supervisor::sighandler);
         }
 
@@ -380,10 +341,6 @@ void Supervisor::printHelp() {
       "                        to restart the application\n"
       "  -R,--restart-on-error Restart the application also on normal\n"
       "                        termination but with an exit code != 0.\n"
-      "  -s,--signal=SIGNAL    Adds given signal to the list of signals\n"
-      "                        to forward to the supervised program.\n"
-      "                        Defaults to (INT, TERM, QUIT, USR1, USR2, HUP)\n"
-      "updates.\n"
       "  -v,--version          Prints program version number and exits\n"
       "  -h,--help             Prints this help and exits.\n"
       "\n"
@@ -500,7 +457,7 @@ void Supervisor::sighandler(int signum) {
 
 int main(int argc, char* argv[]) {
   Supervisor supervisor;
-#if 0 // !defined(NDEBUG)
+#if 0  // !defined(NDEBUG)
   if (argc == 1) {
     static const char* args[] = {
         argv[0],     "--restart-on-error", "--restart-limit=3", "--",
