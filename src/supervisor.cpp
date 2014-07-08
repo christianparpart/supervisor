@@ -37,7 +37,7 @@ class Logger {  // {{{
  public:
   explicit Logger(const char* basename) : basename_(basename) {}
 
-  template<typename... Args>
+  template <typename... Args>
   void info(const char* fmt, Args... args) {
     std::string fmt2("%s[%d]: ");
     fmt2 += fmt;
@@ -45,7 +45,7 @@ class Logger {  // {{{
     fprintf(stdout, fmt2.c_str(), basename_.c_str(), getpid(), args...);
   }
 
-  template<typename... Args>
+  template <typename... Args>
   void error(const char* fmt, Args... args) {
     std::string fmt2("%s[%d]: ");
     fmt2 += fmt;
@@ -273,7 +273,7 @@ bool Program::drop_privileges(const std::string& username,
       }
 
       if (chdir(pw->pw_dir) < 0) {
-        logger_->error("supervisor: could not chdir to %s: %s", pw->pw_dir,
+        logger_->error("could not chdir to %s: %s", pw->pw_dir,
                        strerror(errno));
         return false;
       }
@@ -474,7 +474,8 @@ int Supervisor::run(int argc, char* argv[]) {
   }
 
   if (!pidfile_.empty()) {
-    logger()->info("writing supervisor-PID %d to %s", getpid(), pidfile_.c_str());
+    logger()->info("writing supervisor-PID %d to %s", getpid(),
+                   pidfile_.c_str());
 
     std::ofstream fs(pidfile_, std::ios_base::out | std::ios_base::trunc);
     fs << getpid() << std::endl;
@@ -488,15 +489,12 @@ int Supervisor::run(int argc, char* argv[]) {
       perror("waitpid");
       return EXIT_FAILURE;
     }
-    perror("waitpid(ok)");
 
     if (WIFEXITED(status)) {
       exitCode_ = WEXITSTATUS(status);
 
-      logger()->info(
-          "supervisor: Program PID %d terminated normmally "
-          "with exit code %d",
-          program_->pid(), exitCode_);
+      logger()->info("program PID %d terminated normmally with exit code %d",
+                     program_->pid(), exitCode_);
 
       if (program_->resume()) {
         logger()->info("reattaching to child PID %d.", program_->pid());
@@ -540,7 +538,7 @@ bool Supervisor::restart() {
 
   if (restartLimit_ > 0) {
     restartLimit_--;
-    logger()->info("Restarting application (death counter: %d)", restartLimit_);
+    logger()->info("restarting application (death counter: %d)", restartLimit_);
   }
 
   if (restartDelay_) {
@@ -568,18 +566,7 @@ void Supervisor::sighandler(int signum) {
 
 int main(int argc, char* argv[]) {
   Supervisor supervisor;
-#if 0  // !defined(NDEBUG)
-  if (argc == 1) {
-    static const char* args[] = {
-        argv[0],     "--restart-on-error", "--restart-limit=3", "--",
-        "/bin/echo", "Hello, World",       nullptr};
-    return supervisor.run(sizeof(args) / sizeof(*args) - 1, (char**)args);
-  } else {
-    return supervisor.run(argc, argv);
-  }
-#else
   return supervisor.run(argc, argv);
-#endif
 }
 
 // vim:ts=2:sw=2
