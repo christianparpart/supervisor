@@ -32,6 +32,8 @@ usage:
 options:
   -f,--fork             fork supervisor into background
   -p,--pidfile=PATH     location to store the current supervisor PID
+  -u,--user=NAME        drops application user-privileges
+  -g,--group=NAME       drops application group-privileges
   -r,--restart-limit=N  automatically restart program, if crashed
   -d,--restart-delay=N  number of seconds to wait before we retry
                         to restart the application
