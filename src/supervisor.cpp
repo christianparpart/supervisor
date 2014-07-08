@@ -335,7 +335,7 @@ void Supervisor::printHelp() {
       "  (c) 2009-2014 Christian Parpart <trapni@gmail.com>\n"
       "\n"
       "usage:\n"
-      "  supervisor [-f|--fork] [-p|--pidfile=PATH] -- cmd ...\n"
+      "  supervisor [supervisor options] -- cmd [command options ...]\n"
       "\n"
       "options:\n"
       "  -f,--fork             fork supervisor into background\n"
