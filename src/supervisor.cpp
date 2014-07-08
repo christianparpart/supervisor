@@ -310,23 +310,18 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
     switch (getopt_long(argc, argv, "fp:r:d:Rs:P:vh", opts, &long_index)) {
       case 'f':
         fork_ = true;
-        printf("fork\n");
         break;
       case 'p':
         pidfile_ = optarg;
-        printf("pid file: %s\n", optarg);
         break;
       case 'r':
         restartLimit_ = atoi(optarg);
-        printf("restart limit: %d\n", restartLimit_);
         break;
       case 'd':
         restartDelay_ = atoi(optarg);
-        printf("restart delay: %d\n", restartDelay_);
         break;
       case 'R':
         restartOnError_ = true;
-        printf("restart on error: true\n");
         break;
       case 's':
         if (!addSignal(optarg, forwardedSignals)) {
@@ -336,7 +331,6 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
         break;
       case 'P':
         childPidfile_ = optarg;
-        printf("child pid file: %s\n", optarg);
         break;
       case 'v':
         printVersion();
@@ -417,6 +411,7 @@ int Supervisor::run(int argc, char* argv[]) {
 
     if (!pidfile_.empty()) {
       printf("supervisor: Writing PID %d to %s.\n", getpid(), pidfile_.c_str());
+
       std::ofstream fs(pidfile_, std::ios_base::out | std::ios_base::trunc);
       fs << getpid() << std::endl;
     }
@@ -455,9 +450,7 @@ int Supervisor::run(int argc, char* argv[]) {
           printf("supervisor: Restarting due to error code %d.\n",
                  WEXITSTATUS(status));
 
-          if (restart()) {
-            continue;
-          }
+          if (restart()) continue;
         }
 
         return WEXITSTATUS(status);
@@ -466,10 +459,10 @@ int Supervisor::run(int argc, char* argv[]) {
       if (WIFSIGNALED(status)) {
         printf("Child %d terminated with signal %s (%d)\n", program_->pid(),
                strsignal(WTERMSIG(status)), WTERMSIG(status));
-        if (!restart()) {
-          return EXIT_FAILURE;
-        }
-        continue;
+
+        if (restart()) continue;
+
+        return EXIT_FAILURE;
       }
 
       fprintf(stderr,
