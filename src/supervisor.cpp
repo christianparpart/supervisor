@@ -29,7 +29,7 @@
 
 // TODO
 // - implement --fork
-// - implement application privilege dropping
+// - implement application privilege dropping (--user=S, --group=S)
 
 // {{{ PidTracker
 class PidTracker {
@@ -340,6 +340,8 @@ void Supervisor::printHelp() {
       "options:\n"
       "  -f,--fork             fork supervisor into background\n"
       "  -p,--pidfile=PATH     location to store the current supervisor PID\n"
+      "  -u,--user=NAME        drops application user-privileges\n"
+      "  -g,--group=NAME       drops application group-privileges\n"
       "  -r,--restart-limit=N  automatically restart program, if crashed\n"
       "  -d,--restart-delay=N  number of seconds to wait before we retry\n"
       "                        to restart the application\n"
