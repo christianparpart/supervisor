@@ -26,13 +26,38 @@
 #include <iostream>
 #include <string>
 #include <memory>
+#include <pwd.h>
+#include <grp.h>
 
 // TODO
 // - implement --fork
 // - implement application privilege dropping (--user=S, --group=S)
 
-// {{{ PidTracker
-class PidTracker {
+class Logger {  // {{{
+ public:
+  explicit Logger(const char* basename) : basename_(basename) {}
+
+  template<typename... Args>
+  void info(const char* fmt, Args... args) {
+    std::string fmt2("%s[%d]: ");
+    fmt2 += fmt;
+    fmt2 += "\n";
+    fprintf(stdout, fmt2.c_str(), basename_.c_str(), getpid(), args...);
+  }
+
+  template<typename... Args>
+  void error(const char* fmt, Args... args) {
+    std::string fmt2("%s[%d]: ");
+    fmt2 += fmt;
+    fmt2 += "\n";
+    fprintf(stderr, fmt2.c_str(), basename_.c_str(), getpid(), args...);
+  }
+
+ private:
+  const std::string basename_;
+};
+// }}}
+class PidTracker {  // {{{
  public:
   PidTracker();
   ~PidTracker();
@@ -101,7 +126,9 @@ void PidTracker::dump(const char* msg) {
 // }}}
 class Program {  // {{{
  public:
-  Program(const std::string& exe, const std::vector<std::string>& argv);
+  Program(Logger* logger, const std::string& exe,
+          const std::vector<std::string>& argv, const std::string& user,
+          const std::string& group);
   ~Program();
 
   bool start();
@@ -114,15 +141,29 @@ class Program {  // {{{
  private:
   bool spawn();
 
+  bool drop_privileges(const std::string& username,
+                       const std::string& groupname);
+
  private:
+  Logger* logger_;
   std::string exe_;
   std::vector<std::string> argv_;
+  std::string user_;
+  std::string group_;
   int pid_;
   PidTracker pidTracker_;
 };
 
-Program::Program(const std::string& exe, const std::vector<std::string>& argv)
-    : exe_(exe), argv_(argv), pid_(0), pidTracker_() {}
+Program::Program(Logger* logger, const std::string& exe,
+                 const std::vector<std::string>& argv, const std::string& user,
+                 const std::string& group)
+    : logger_(logger),
+      exe_(exe),
+      argv_(argv),
+      user_(user),
+      group_(group),
+      pid_(0),
+      pidTracker_() {}
 
 Program::~Program() {}
 
@@ -132,12 +173,12 @@ bool Program::start() {
 }
 
 bool Program::restart() {
-  //pidTracker_.dump("restart");
+  // pidTracker_.dump("restart");
 
   const auto pids = pidTracker_.get();
   if (!pids.empty()) {
     pid_ = pids[0];
-    printf("supervisor: reattaching to child PID %d\n", pid_);
+    logger_->info("reattaching to child PID %d", pid_);
     return true;
   }
 
@@ -145,7 +186,7 @@ bool Program::restart() {
 }
 
 bool Program::resume() {
-  //pidTracker_.dump("resume");
+  pidTracker_.dump("resume");
   const auto pids = pidTracker_.get();
   if (pids.empty()) {
     return false;
@@ -162,22 +203,22 @@ void Program::signal(int signo) {
 }
 
 bool Program::spawn() {
-  printf("supervisor: spawning program (%s)...\n", exe_.c_str());
+  logger_->info("spawning program (%s)...", exe_.c_str());
 
   pid_t pid = fork();
 
   if (pid < 0) {
-    fprintf(stderr, "supervisor: fork failed. %s\n", strerror(errno));
+    logger_->error("fork failed. %s", strerror(errno));
     return false;
   } else if (pid > 0) {  // parent
     pid_ = pid;
     pidTracker_.add(pid);
-    printf("supervisor: child pid is %d\n", pid);
-    //pidTracker_.dump("spawn");
+    logger_->info("child pid is %d", pid);
+    // pidTracker_.dump("spawn");
 
     if (prctl(PR_SET_CHILD_SUBREAPER, 1) < 0) {
-      fprintf(stderr, "supervisor: prctl(PR_SET_CHILD_SUBREAPER) failed. %s",
-              strerror(errno));
+      logger_->info("prctl(PR_SET_CHILD_SUBREAPER) failed. %s",
+                    strerror(errno));
 
       // if this one fails, we can still be functional to *SOME* degree,
       // like, auto-restarting still works, but
@@ -187,15 +228,64 @@ bool Program::spawn() {
   } else {  // child
     std::vector<char*> argv;
 
+    drop_privileges(user_, group_);
+
     for (const std::string& arg : argv_) {
       argv.push_back(const_cast<char*>(arg.c_str()));
     }
     argv.push_back(nullptr);
 
     execvp(exe_.c_str(), argv.data());
-    fprintf(stderr, "execvp failed. %s\n", strerror(errno));
+    logger_->error("execvp failed. %s", strerror(errno));
     abort();
   }
+}
+
+bool Program::drop_privileges(const std::string& username,
+                              const std::string& groupname) {
+  if (!groupname.empty() && !getgid()) {
+    if (struct group* gr = getgrnam(groupname.c_str())) {
+      if (setgid(gr->gr_gid) != 0) {
+        logger_->error("could not setgid to %s: %s", groupname.c_str(),
+                       strerror(errno));
+        return false;
+      }
+
+      setgroups(0, nullptr);
+
+      if (!username.empty()) {
+        initgroups(username.c_str(), gr->gr_gid);
+      }
+    } else {
+      logger_->error("Could not find group: %s", groupname.c_str());
+      return false;
+    }
+
+    logger_->info("dropped group privileges to '%s'.", groupname.c_str());
+  }
+
+  if (!username.empty() && !getuid()) {
+    if (struct passwd* pw = getpwnam(username.c_str())) {
+      if (setuid(pw->pw_uid) != 0) {
+        logger_->error("could not setgid to %s: %s", username.c_str(),
+                       strerror(errno));
+        return false;
+      }
+
+      if (chdir(pw->pw_dir) < 0) {
+        logger_->error("supervisor: could not chdir to %s: %s", pw->pw_dir,
+                       strerror(errno));
+        return false;
+      }
+    } else {
+      logger_->error("Could not find group: %s", groupname.c_str());
+      return false;
+    }
+
+    logger_->info("dropped user privileges to '%s'.", username.c_str());
+  }
+
+  return true;
 }
 // }}}
 class Supervisor {  // {{{
@@ -214,10 +304,18 @@ class Supervisor {  // {{{
   bool restart();
   static void sighandler(int signum);
 
+  bool drop_privileges(const std::string& username,
+                       const std::string& groupname);
+
+  Logger* logger() { return &logger_; }
+
  private:
   static Supervisor* self_;
+  Logger logger_;
   std::unique_ptr<Program> program_;
   std::string pidfile_;
+  std::string user_;
+  std::string group_;
   int restartLimit_;
   int restartDelay_;
   int restartOnError_;
@@ -229,7 +327,8 @@ class Supervisor {  // {{{
 Supervisor* Supervisor::self_ = nullptr;
 
 Supervisor::Supervisor()
-    : program_(nullptr),
+    : logger_("supervisor"),
+      program_(nullptr),
       pidfile_(),
       restartLimit_(0),  // do not auto-restart
       restartDelay_(0),  // do not wait during restarts
@@ -258,8 +357,10 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
   struct option opts[] = {
       {"fork", no_argument, nullptr, 'f'},
       {"pidfile", required_argument, nullptr, 'p'},
-      {"restart-limit", required_argument, &restartLimit_, 'r'},
-      {"restart-delay", required_argument, &restartDelay_, 'd'},
+      {"user", required_argument, nullptr, 'u'},
+      {"group", required_argument, nullptr, 'g'},
+      {"restart-limit", required_argument, nullptr, 'r'},
+      {"restart-delay", required_argument, nullptr, 'd'},
       {"restart-on-error", no_argument, &restartOnError_, 'R'},
       //.
       {"version", no_argument, nullptr, 'v'},
@@ -268,14 +369,23 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
       //.
       {0, 0, 0, 0}};
 
+  std::string user;
+  std::string group;
+
   for (;;) {
     int long_index = 0;
-    switch (getopt_long(argc, argv, "fp:r:d:Rvh", opts, &long_index)) {
+    switch (getopt_long(argc, argv, "fp:u:g:r:d:Rvh", opts, &long_index)) {
       case 'f':
         fork_ = true;
         break;
       case 'p':
         pidfile_ = optarg;
+        break;
+      case 'u':
+        user = optarg;
+        break;
+      case 'g':
+        group = optarg;
         break;
       case 'r':
         restartLimit_ = atoi(optarg);
@@ -297,7 +407,7 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
       case -1: {
         // EOF - everything parsed.
         if (optind == argc) {
-          fprintf(stderr, "supervisor: no program path given\n");
+          logger()->error("no program path given");
           return false;
         }
 
@@ -306,7 +416,7 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
           args.push_back(argv[optind++]);
         }
 
-        program_.reset(new Program(args[0], args));
+        program_.reset(new Program(logger(), args[0], args, user, group));
 
         auto signals = {SIGINT,  SIGQUIT, SIGTERM, SIGCONT,
                         SIGUSR1, SIGUSR2, SIGTTIN, SIGTTOU};
@@ -343,6 +453,7 @@ void Supervisor::printHelp() {
       "  -u,--user=NAME        drops application user-privileges\n"
       "  -g,--group=NAME       drops application group-privileges\n"
       "  -r,--restart-limit=N  automatically restart program, if crashed\n"
+      "                        A limit of -1 means unlimited restarts.\n"
       "  -d,--restart-delay=N  number of seconds to wait before we retry\n"
       "                        to restart the application\n"
       "  -R,--restart-on-error Restart the application also on normal\n"
@@ -363,21 +474,11 @@ int Supervisor::run(int argc, char* argv[]) {
   }
 
   if (!pidfile_.empty()) {
-    printf("supervisor: Writing PID %d to %s.\n", getpid(), pidfile_.c_str());
+    logger()->info("writing supervisor-PID %d to %s", getpid(), pidfile_.c_str());
 
     std::ofstream fs(pidfile_, std::ios_base::out | std::ios_base::trunc);
     fs << getpid() << std::endl;
   }
-
-  // if (setsid() < 0) {
-  //   fprintf(stderr, "Error creating session. %s\n", strerror(errno));
-  //   return EXIT_FAILURE;
-  // }
-
-  // if (setpgrp() < 0) {
-  //   fprintf(stderr, "Error creating process group. %s\n", strerror(errno));
-  //   return EXIT_FAILURE;
-  // }
 
   program_->start();
 
@@ -387,22 +488,23 @@ int Supervisor::run(int argc, char* argv[]) {
       perror("waitpid");
       return EXIT_FAILURE;
     }
+    perror("waitpid(ok)");
 
     if (WIFEXITED(status)) {
       exitCode_ = WEXITSTATUS(status);
 
-      printf(
+      logger()->info(
           "supervisor: Program PID %d terminated normmally "
-          "with exit code %d\n",
+          "with exit code %d",
           program_->pid(), exitCode_);
 
       if (program_->resume()) {
-        printf("supervisor: Reattaching to child PID %d.\n", program_->pid());
+        logger()->info("reattaching to child PID %d.", program_->pid());
         continue;
       }
 
       if (exitCode_ != EXIT_SUCCESS && restartOnError_) {
-        printf("supervisor: Restarting due to error code %d.\n", exitCode_);
+        logger()->info("restarting due to error code %d", exitCode_);
 
         if (restart()) continue;
       }
@@ -411,18 +513,19 @@ int Supervisor::run(int argc, char* argv[]) {
     }
 
     if (WIFSIGNALED(status)) {
-      printf("Child %d terminated with signal '%s' (%d)\n", program_->pid(),
-             strsignal(WTERMSIG(status)), WTERMSIG(status));
+      logger()->info("Child %d terminated with signal '%s' (%d)",
+                     program_->pid(), strsignal(WTERMSIG(status)),
+                     WTERMSIG(status));
 
       if (restart()) continue;
 
       return exitCode_;
     }
 
-    fprintf(stderr,
-            "Child %d terminated (neither normally nor abnormally. "
-            "Status code %d\n",
-            program_->pid(), status);
+    logger()->error(
+        "Child %d terminated (neither normally nor abnormally. "
+        "Status code %d",
+        program_->pid(), status);
 
     if (restart()) continue;
 
@@ -437,8 +540,7 @@ bool Supervisor::restart() {
 
   if (restartLimit_ > 0) {
     restartLimit_--;
-    printf("supervisor: Restarting application (death counter: %d)\n",
-           restartLimit_);
+    logger()->info("Restarting application (death counter: %d)", restartLimit_);
   }
 
   if (restartDelay_) {
@@ -454,8 +556,9 @@ void Supervisor::sighandler(int signum) {
   }
 
   if (self()->program_->pid()) {
-    printf("Signal %s (%d) received. Forwarding to child PID %d.\n",
-           strsignal(signum), signum, self()->program_->pid());
+    self()->logger()->info(
+        "Signal '%s' (%d) received. Forwarding to child PID %d.",
+        strsignal(signum), signum, self()->program_->pid());
 
     // forward to child process
     self()->program_->signal(signum);
