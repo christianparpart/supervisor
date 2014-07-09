@@ -31,7 +31,6 @@
 
 // TODO
 // - implement --fork
-// - install SIGSEGV handler to cleanup cgroup dir
 
 class Logger {  // {{{
  public:
@@ -148,6 +147,7 @@ int PidTracker::findMainPID() {
 }
 
 void PidTracker::dump(const char* msg) {
+#if 0 // !defined(NDEBUG)
   assert(msg && *msg);
   printf("PID tracking dump (%s): ", msg);
 
@@ -155,6 +155,7 @@ void PidTracker::dump(const char* msg) {
     printf(" %d", pid);
   }
   printf("\n");
+#endif
 }
 // }}}
 class Program {  // {{{
