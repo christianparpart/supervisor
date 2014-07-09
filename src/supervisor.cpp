@@ -115,6 +115,9 @@ std::vector<int> PidTracker::collectAll() {
   return result;
 }
 
+/**
+ * Retrieves the parent-PID of a given process or 0 on error.
+ */
 pid_t getppid(pid_t pid) {
   char statfile[64];
   snprintf(statfile, sizeof(statfile), "/proc/%d/stat", pid);
@@ -122,13 +125,11 @@ pid_t getppid(pid_t pid) {
   if (!fp) return 0;
 
   int pid0;
-  char comm[16]; // definitely below 16
+  char comm[16];  // definitely below 16
   char state;
   int ppid;
 
   fscanf(fp, "%d %s %c %d", &pid0, comm, &state, &ppid);
-
-  //printf("getppid[%d]: %d -> %d\n", getpid(), pid, ppid);
 
   return ppid;
 }
@@ -139,7 +140,6 @@ int PidTracker::findMainPID() {
 
   for (int pid : collectAll()) {
     if (getppid(pid) == getpid()) {
-      //printf("findMainPID: add candidate PID %d\n", pid);
       candidates.push_back(pid);
     }
   }
@@ -453,6 +453,11 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
         // EOF - everything parsed.
         if (optind == argc) {
           logger()->error("no program path given");
+          return false;
+        }
+
+        if (getuid() && getuid()) {
+          logger()->error("Must run as (setuid) root. Please fix permissions.");
           return false;
         }
 
