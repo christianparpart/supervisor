@@ -29,9 +29,6 @@
 #include <pwd.h>
 #include <grp.h>
 
-// TODO
-// - implement --fork
-
 class Logger {  // {{{
  public:
   explicit Logger(const char* basename) : basename_(basename) {}
@@ -460,6 +457,16 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
         if (getuid() && getuid()) {
           logger()->error("Must run as (setuid) root. Please fix permissions.");
           return false;
+        }
+
+        if (fork_) {
+          int rv = daemon(/*nochdir*/ false, /*noclose*/ true);
+          if (rv < 0) {
+            logger()->error("Could not daemonize into background. %s",
+                            strerror(errno));
+
+            return false;
+          }
         }
 
         std::vector<std::string> args;
