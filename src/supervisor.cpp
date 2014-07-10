@@ -29,6 +29,10 @@
 #include <pwd.h>
 #include <grp.h>
 
+// THOUGHTS
+// - maybe, with the new getppid()+PR_SET_CHILD_SUBREAPER I do not need cgroups
+//   - the only advantage with cgroups then is, that my search space is smaller
+
 class Logger {  // {{{
  public:
   explicit Logger(const char* basename) : basename_(basename) {}
@@ -131,20 +135,20 @@ pid_t getppid(pid_t pid) {
 }
 
 int PidTracker::findMainPID() {
-  const auto pids = collectAll();
   std::vector<int> candidates;
 
   for (int pid : collectAll()) {
     if (getppid(pid) == getpid()) {
+      // TODO also ensure that /proc/PID/exe points to the same executable
       candidates.push_back(pid);
     }
   }
 
-  return candidates.empty() ? candidates.front() : 0;
+  return !candidates.empty() ? candidates.front() : 0;
 }
 
 void PidTracker::dump(const char* msg) {
-#if 0 // !defined(NDEBUG)
+#if 0  // !defined(NDEBUG)
   assert(msg && *msg);
   printf("PID tracking dump (%s): ", msg);
 
@@ -203,26 +207,8 @@ bool Program::start() {
   return spawn();
 }
 
-bool Program::restart() {
-  // pidTracker_.dump("restart");
-
-  if (pid_t pid = pidTracker_.findMainPID()) {
-    pid_ = pid;
-    return true;
-  }
-
-  const auto pids = pidTracker_.collectAll();
-  if (!pids.empty()) {
-    pid_ = pids[0];
-    logger_->info("performing hardcore action, and an educated guess");
-    return true;
-  }
-
-  return spawn();
-}
-
 bool Program::resume() {
-  pidTracker_.dump("resume");
+  // pidTracker_.dump("resume");
 
   if (pid_t pid = pidTracker_.findMainPID()) {
     logger_->info("reattaching to child PID %d", pid_);
@@ -231,13 +217,19 @@ bool Program::resume() {
   }
 
   const auto pids = pidTracker_.collectAll();
-  if (pids.empty()) {
-    return false;
+  if (!pids.empty()) {
+    logger_->info("reattaching to child PID %d (educated guess)", pid_);
+    pid_ = pids[0];
+    return true;
   }
 
-  pid_ = pids[0];
+  return false;
+}
 
-  return true;
+bool Program::restart() {
+  // pidTracker_.dump("restart");
+
+  return spawn();
 }
 
 void Program::signal(int signo) {
@@ -431,9 +423,11 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
         group = optarg;
         break;
       case 'r':
+        // TODO: ensure optarg is a number
         restartLimit_ = atoi(optarg);
         break;
       case 'd':
+        // TODO: ensure optarg is a number
         restartDelay_ = atoi(optarg);
         break;
       case 'R':
@@ -454,6 +448,16 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
           return false;
         }
 
+        std::vector<std::string> args;
+        while (optind < argc) {
+          args.push_back(argv[optind++]);
+        }
+
+        if (args[0].empty() || args[0][0] != '/') {
+          logger()->error("program path must be absolute.");
+          return false;
+        }
+
         if (getuid() && getuid()) {
           logger()->error("Must run as (setuid) root. Please fix permissions.");
           return false;
@@ -467,11 +471,6 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
 
             return false;
           }
-        }
-
-        std::vector<std::string> args;
-        while (optind < argc) {
-          args.push_back(argv[optind++]);
         }
 
         program_.reset(new Program(logger(), args[0], args, user, group));
@@ -503,7 +502,7 @@ void Supervisor::printHelp() {
       "  (c) 2009-2014 Christian Parpart <trapni@gmail.com>\n"
       "\n"
       "usage:\n"
-      "  supervisor [supervisor options] -- cmd [command options ...]\n"
+      "  supervisor [supervisor options] -- /path/to/app [app options ...]\n"
       "\n"
       "options:\n"
       "  -f,--fork             fork supervisor into background\n"
@@ -551,7 +550,7 @@ int Supervisor::run(int argc, char* argv[]) {
     if (WIFEXITED(status)) {
       exitCode_ = WEXITSTATUS(status);
 
-      logger()->info("program PID %d terminated normmally with exit code %d",
+      logger()->info("program PID %d terminated normally with exit code %d",
                      program_->pid(), exitCode_);
 
       if (program_->resume()) {
@@ -565,15 +564,18 @@ int Supervisor::run(int argc, char* argv[]) {
         if (restart()) continue;
       }
 
+      logger()->info("shutting down supervisor with application exit code %d",
+                     exitCode_);
+
       return exitCode_;
     }
 
     if (WIFSIGNALED(status)) {
+      int sig = WTERMSIG(status);
       logger()->info("Child %d terminated with signal '%s' (%d)",
-                     program_->pid(), strsignal(WTERMSIG(status)),
-                     WTERMSIG(status));
+                     program_->pid(), strsignal(sig), sig);
 
-      if (restart()) continue;
+      if (sig == SIGSEGV && restart()) continue;
 
       return exitCode_;
     }
@@ -607,10 +609,6 @@ bool Supervisor::restart() {
 }
 
 void Supervisor::sighandler(int signum) {
-  if (signum == SIGTERM) {
-    self()->quit_ = true;
-  }
-
   if (self()->program_->pid()) {
     self()->logger()->info(
         "Signal '%s' (%d) received. Forwarding to child PID %d.",
