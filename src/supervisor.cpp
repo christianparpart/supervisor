@@ -35,26 +35,34 @@
 
 class Logger {  // {{{
  public:
-  explicit Logger(const char* basename) : basename_(basename) {}
+  Logger(const char* basename, int logLevel)
+      : basename_(basename), logLevel_(logLevel) {}
 
-  template <typename... Args>
-  void info(const char* fmt, Args... args) {
-    std::string fmt2("%s[%d]: ");
-    fmt2 += fmt;
-    fmt2 += "\n";
-    fprintf(stdout, fmt2.c_str(), basename_.c_str(), getpid(), args...);
-  }
+  void setLogLevel(int level) { logLevel_ = level; }
 
   template <typename... Args>
   void error(const char* fmt, Args... args) {
-    std::string fmt2("%s[%d]: ");
-    fmt2 += fmt;
-    fmt2 += "\n";
-    fprintf(stderr, fmt2.c_str(), basename_.c_str(), getpid(), args...);
+    if (logLevel_ >= 1) {
+      std::string fmt2("%s[%d]: ");
+      fmt2 += fmt;
+      fmt2 += "\n";
+      fprintf(stderr, fmt2.c_str(), basename_.c_str(), getpid(), args...);
+    }
+  }
+
+  template <typename... Args>
+  void info(const char* fmt, Args... args) {
+    if (logLevel_ >= 2) {
+      std::string fmt2("%s[%d]: ");
+      fmt2 += fmt;
+      fmt2 += "\n";
+      fprintf(stdout, fmt2.c_str(), basename_.c_str(), getpid(), args...);
+    }
   }
 
  private:
   const std::string basename_;
+  int logLevel_;
 };
 // }}}
 class PidTracker {  // {{{
@@ -362,7 +370,7 @@ class Supervisor {  // {{{
 Supervisor* Supervisor::self_ = nullptr;
 
 Supervisor::Supervisor()
-    : logger_("supervisor"),
+    : logger_("supervisor", 2),
       program_(nullptr),
       pidfile_(),
       restartLimit_(0),  // do not auto-restart
@@ -397,6 +405,7 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
       {"restart-limit", required_argument, nullptr, 'r'},
       {"restart-delay", required_argument, nullptr, 'd'},
       {"restart-on-error", no_argument, &restartOnError_, 'R'},
+      {"quiet", no_argument, nullptr, 'q'},
       //.
       {"version", no_argument, nullptr, 'v'},
       {"copyright", no_argument, nullptr, 'y'},
@@ -406,10 +415,11 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
 
   std::string user;
   std::string group;
+  int logLevel = 2;
 
   for (;;) {
     int long_index = 0;
-    switch (getopt_long(argc, argv, "fp:u:g:r:d:Rvh", opts, &long_index)) {
+    switch (getopt_long(argc, argv, "fp:u:g:r:d:Rqvh", opts, &long_index)) {
       case 'f':
         fork_ = true;
         break;
@@ -432,6 +442,9 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
         break;
       case 'R':
         restartOnError_ = true;
+        break;
+      case 'q':
+        logLevel--;
         break;
       case 'v':
         printVersion();
@@ -472,6 +485,8 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
             return false;
           }
         }
+
+        logger_.setLogLevel(logLevel);
 
         program_.reset(new Program(logger(), args[0], args, user, group));
 
@@ -515,6 +530,8 @@ void Supervisor::printHelp() {
       "                        to restart the application\n"
       "  -R,--restart-on-error Restart the application also on normal\n"
       "                        termination but with an exit code != 0.\n"
+      "  -q,--quiet            decreases verbosity level,\n"
+      "                        use -qq to void runtime errors too\n"
       "  -v,--version          Prints program version number and exits\n"
       "  -h,--help             Prints this help and exits.\n"
       "\n"

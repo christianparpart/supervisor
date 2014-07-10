@@ -40,6 +40,8 @@ options:
                         to restart the application
   -R,--restart-on-error Restart the application also on normal
                         termination but with an exit code != 0.
+  -q,--quiet            decreases verbosity level,
+                        use -qq to void runtime errors too
   -v,--version          Prints program version number and exits
   -h,--help             Prints this help and exits.
 
@@ -47,7 +49,6 @@ Examples:
     supervisor -- /usr/sbin/x0d --no-fork
     supervisor -p /var/run/xzero/supervisor.pid -- /usr/sbin/x0d \
                --no-fork
-
 ```
 
 ### Known Caveats
