@@ -27,7 +27,7 @@ supervisor: a process supervising tool
   (c) 2009-2014 Christian Parpart <trapni@gmail.com>
 
 usage:
-  supervisor [supervisor options] -- cmd [command options ...]
+  supervisor [supervisor options] -- /path/to/app [app options ...]
 
 options:
   -f,--fork             fork supervisor into background
@@ -35,13 +35,11 @@ options:
   -u,--user=NAME        drops application user-privileges
   -g,--group=NAME       drops application group-privileges
   -r,--restart-limit=N  automatically restart program, if crashed
+                        A limit of -1 means unlimited restarts.
   -d,--restart-delay=N  number of seconds to wait before we retry
                         to restart the application
   -R,--restart-on-error Restart the application also on normal
                         termination but with an exit code != 0.
-  -s,--signal=SIGNAL    Adds given signal to the list of signals
-                        to forward to the supervised program.
-                        Defaults to (INT, TERM, QUIT, USR1, USR2, HUP)
   -v,--version          Prints program version number and exits
   -h,--help             Prints this help and exits.
 
@@ -49,6 +47,7 @@ Examples:
     supervisor -- /usr/sbin/x0d --no-fork
     supervisor -p /var/run/xzero/supervisor.pid -- /usr/sbin/x0d \
                --no-fork
+
 ```
 
 ### Known Caveats
