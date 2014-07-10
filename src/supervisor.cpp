@@ -70,11 +70,16 @@ class PidTracker {  // {{{
   PidTracker();
   ~PidTracker();
 
+  void setMainExe(const std::string& exe) { mainExe_ = exe; }
+
   void add(int pid);
   std::vector<int> collectAll();
   int findMainPID();
 
   void dump(const char* msg);
+
+ private:
+  std::string mainExe_;
 };
 
 PidTracker::PidTracker() {
@@ -126,7 +131,7 @@ std::vector<int> PidTracker::collectAll() {
 /**
  * Retrieves the parent-PID of a given process or 0 on error.
  */
-pid_t getppid(pid_t pid) {
+static pid_t getppid(pid_t pid) {
   char statfile[64];
   snprintf(statfile, sizeof(statfile), "/proc/%d/stat", pid);
   FILE* fp = fopen(statfile, "r");
@@ -142,13 +147,41 @@ pid_t getppid(pid_t pid) {
   return ppid;
 }
 
+/**
+ * Retrieves absolute path to the executable of a given PID.
+ */
+static std::string getExe(pid_t pid) {
+  char path[11 + 16];
+  snprintf(path, sizeof(path), "/proc/%d/exe", pid);
+
+  char buf[4096];
+  ssize_t n = readlink(path, buf, sizeof(buf) - 1);
+
+  if (n > 0) {
+    return std::string(buf, n);
+  } else {
+    return std::string();
+  }
+}
+
+/**
+ * Finds the main PID in a process group.
+ *
+ * Requirements:
+ *
+ * <ul>
+ *   <li> the main process must be a direct child of the calling process
+ *   <li> the main process's exe path must be matching the expected path
+ * </ul>
+ */
 int PidTracker::findMainPID() {
   std::vector<int> candidates;
 
   for (int pid : collectAll()) {
     if (getppid(pid) == getpid()) {
-      // TODO also ensure that /proc/PID/exe points to the same executable
-      candidates.push_back(pid);
+      if (getExe(pid) == mainExe_) {
+        candidates.push_back(pid);
+      }
     }
   }
 
@@ -206,7 +239,10 @@ Program::Program(Logger* logger, const std::string& exe,
       user_(user),
       group_(group),
       pid_(0),
-      pidTracker_() {}
+      pidTracker_() {
+
+  pidTracker_.setMainExe(exe);
+}
 
 Program::~Program() {}
 
@@ -219,14 +255,12 @@ bool Program::resume() {
   // pidTracker_.dump("resume");
 
   if (pid_t pid = pidTracker_.findMainPID()) {
-    logger_->info("reattaching to child PID %d", pid_);
     pid_ = pid;
     return true;
   }
 
   const auto pids = pidTracker_.collectAll();
   if (!pids.empty()) {
-    logger_->info("reattaching to child PID %d (educated guess)", pid_);
     pid_ = pids[0];
     return true;
   }
