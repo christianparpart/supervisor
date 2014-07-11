@@ -34,19 +34,17 @@ options:
   -p,--pidfile=PATH     location to store the current supervisor PID
   -u,--user=NAME        drops application user-privileges
   -g,--group=NAME       drops application group-privileges
-  -r,--restart-limit=N  automatically restart program, if crashed
-                        A limit of -1 means unlimited restarts.
-  -d,--restart-delay=N  number of seconds to wait before we retry
-                        to restart the application
-  -R,--restart-on-error Restart the application also on normal
+  -l,--delay-limit=N    maximum delay to sleep between restarts [80]
+  -e,--restart-on-error Restart the application also on normal
                         termination but with an exit code != 0.
+  -c,--restart-on-crash restart application on crash (SIGSEGV)
   -q,--quiet            decreases verbosity level,
                         use -qq to void runtime errors too
   -v,--version          Prints program version number and exits
   -h,--help             Prints this help and exits.
 
 Examples:
-    supervisor -- /usr/sbin/x0d --no-fork
+    supervisor -c -- /usr/sbin/x0d
     supervisor -p /var/run/xzero/supervisor.pid -- /usr/sbin/x0d \
                --no-fork
 ```

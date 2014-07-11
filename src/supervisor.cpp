@@ -28,10 +28,15 @@
 #include <memory>
 #include <pwd.h>
 #include <grp.h>
+#include <algorithm>
 
 // THOUGHTS
 // - maybe, with the new getppid()+PR_SET_CHILD_SUBREAPER I do not need cgroups
 //   - the only advantage with cgroups then is, that my search space is smaller
+//
+// TODO
+// - atexit: should cleanup all remaining processes in the cgroup.
+//   - send TERM -> QUIT -> KILL
 
 class Logger {  // {{{
  public:
@@ -393,9 +398,12 @@ class Supervisor {  // {{{
   std::string pidfile_;
   std::string user_;
   std::string group_;
-  int restartLimit_;
-  int restartDelay_;
-  int restartOnError_;
+  int restartCount_;       //!< number of actual restarts so far
+  int restartDelay_;       //!< current restart delay
+  int restartDelayLimit_;  //!< restart delay limit
+
+  int restartOnError_;  //!< restart app on normal exit but code != 0
+  int restartOnCrash_;  //!< restart app on SIGSEGV
   bool fork_;
   bool quit_;
   int exitCode_;
@@ -407,9 +415,11 @@ Supervisor::Supervisor()
     : logger_("supervisor", 2),
       program_(nullptr),
       pidfile_(),
-      restartLimit_(0),  // do not auto-restart
-      restartDelay_(0),  // do not wait during restarts
+      restartCount_(0),        // number of actual restarts
+      restartDelay_(0),        // do not wait during restarts
+      restartDelayLimit_(80),  // exponential backup delay cap
       restartOnError_(false),
+      restartOnCrash_(false),
       fork_(false),
       quit_(false),
       exitCode_(0) {
@@ -431,21 +441,19 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
     return false;
   }
 
-  struct option opts[] = {
-      {"fork", no_argument, nullptr, 'f'},
-      {"pidfile", required_argument, nullptr, 'p'},
-      {"user", required_argument, nullptr, 'u'},
-      {"group", required_argument, nullptr, 'g'},
-      {"restart-limit", required_argument, nullptr, 'r'},
-      {"restart-delay", required_argument, nullptr, 'd'},
-      {"restart-on-error", no_argument, &restartOnError_, 'R'},
-      {"quiet", no_argument, nullptr, 'q'},
-      //.
-      {"version", no_argument, nullptr, 'v'},
-      {"copyright", no_argument, nullptr, 'y'},
-      {"help", no_argument, nullptr, 'h'},
-      //.
-      {0, 0, 0, 0}};
+  struct option opts[] = {{"fork", no_argument, nullptr, 'f'},
+                          {"pidfile", required_argument, nullptr, 'p'},
+                          {"user", required_argument, nullptr, 'u'},
+                          {"group", required_argument, nullptr, 'g'},
+                          {"delay-limit", required_argument, nullptr, 'l'},
+                          {"restart-on-error", no_argument, nullptr, 'e'},
+                          {"restart-on-crash", no_argument, nullptr, 'c'},
+                          {"quiet", no_argument, nullptr, 'q'},
+                          //.
+                          {"version", no_argument, nullptr, 'v'},
+                          {"help", no_argument, nullptr, 'h'},
+                          //.
+                          {0, 0, 0, 0}};
 
   std::string user;
   std::string group;
@@ -453,7 +461,7 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
 
   for (;;) {
     int long_index = 0;
-    switch (getopt_long(argc, argv, "fp:u:g:r:d:Rqvh", opts, &long_index)) {
+    switch (getopt_long(argc, argv, "fp:u:g:l:ecqvh", opts, &long_index)) {
       case 'f':
         fork_ = true;
         break;
@@ -466,16 +474,15 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
       case 'g':
         group = optarg;
         break;
-      case 'r':
+      case 'l':
         // TODO: ensure optarg is a number
-        restartLimit_ = atoi(optarg);
+        restartDelayLimit_ = atoi(optarg);
         break;
-      case 'd':
-        // TODO: ensure optarg is a number
-        restartDelay_ = atoi(optarg);
-        break;
-      case 'R':
+      case 'e':
         restartOnError_ = true;
+        break;
+      case 'c':
+        restartOnCrash_ = true;
         break;
       case 'q':
         logLevel--;
@@ -558,19 +565,17 @@ void Supervisor::printHelp() {
       "  -p,--pidfile=PATH     location to store the current supervisor PID\n"
       "  -u,--user=NAME        drops application user-privileges\n"
       "  -g,--group=NAME       drops application group-privileges\n"
-      "  -r,--restart-limit=N  automatically restart program, if crashed\n"
-      "                        A limit of -1 means unlimited restarts.\n"
-      "  -d,--restart-delay=N  number of seconds to wait before we retry\n"
-      "                        to restart the application\n"
-      "  -R,--restart-on-error Restart the application also on normal\n"
+      "  -l,--delay-limit=N    maximum delay to sleep between restarts [80]\n"
+      "  -e,--restart-on-error Restart the application also on normal\n"
       "                        termination but with an exit code != 0.\n"
+      "  -c,--restart-on-crash restart application on crash (SIGSEGV)\n"
       "  -q,--quiet            decreases verbosity level,\n"
       "                        use -qq to void runtime errors too\n"
       "  -v,--version          Prints program version number and exits\n"
       "  -h,--help             Prints this help and exits.\n"
       "\n"
       "Examples:\n"
-      "    supervisor -- /usr/sbin/x0d --no-fork\n"
+      "    supervisor -c -- /usr/sbin/x0d\n"
       "    supervisor -p /var/run/xzero/supervisor.pid -- /usr/sbin/x0d \\\n"
       "               --no-fork\n"
       "\n");
@@ -626,7 +631,13 @@ int Supervisor::run(int argc, char* argv[]) {
       logger()->info("Child %d terminated with signal '%s' (%d)",
                      program_->pid(), strsignal(sig), sig);
 
-      if (sig == SIGSEGV && restart()) continue;
+      // do only attempt to restart if it's none of those signals.
+      static const int sigs[] = {SIGTERM, SIGINT, SIGQUIT};
+
+      bool softTerminate =
+          std::find(std::begin(sigs), std::end(sigs), sig) != std::end(sigs);
+
+      if (!softTerminate && restartOnCrash_ && restart()) continue;
 
       return exitCode_;
     }
@@ -643,18 +654,21 @@ int Supervisor::run(int argc, char* argv[]) {
 }
 
 bool Supervisor::restart() {
-  if (quit_ || restartLimit_ == 0) {
+  if (quit_) {
     return false;
   }
 
-  if (restartLimit_ > 0) {
-    restartLimit_--;
-    logger()->info("restarting application (death counter: %d)", restartLimit_);
+  if (restartDelay_) {
+    logger()->info("restart is sleeping for %d seconds", restartDelay_);
+    sleep(restartDelay_);
+
+    // exponential backoff for the next restart
+    restartDelay_ = std::min(restartDelay_ << 1, restartDelayLimit_);
+  } else {
+    restartDelay_ = 1;
   }
 
-  if (restartDelay_) {
-    sleep(restartDelay_);
-  }
+  restartCount_++;
 
   return program_->restart();
 }
