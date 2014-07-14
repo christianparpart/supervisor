@@ -554,7 +554,7 @@ void Supervisor::printVersion() {
 
 void Supervisor::printHelp() {
   printf(
-      "supervisor: a process supervising tool\n"
+      "supervisor: a process supervising tool, version %s\n"
       "  (c) 2009-2014 Christian Parpart <trapni@gmail.com>\n"
       "\n"
       "usage:\n"
@@ -578,7 +578,8 @@ void Supervisor::printHelp() {
       "    supervisor -c -- /usr/sbin/x0d\n"
       "    supervisor -p /var/run/xzero/supervisor.pid -- /usr/sbin/x0d \\\n"
       "               --no-fork\n"
-      "\n");
+      "\n",
+      SUPERVISOR_VERSION);
 }
 
 int Supervisor::run(int argc, char* argv[]) {
