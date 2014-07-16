@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 2.8)
 
 project(supervisor)
 set(PACKAGE_NAME "supervisor")
-set(PACKAGE_VERSION "0.1.0-dev")
+set(PACKAGE_VERSION "0.1.0")
 set(PACKAGE_HOMEPAGE_URL "http://supervisor.xzero.io/")
 set(PACKAGE_BUGTRACKER_URL "https://github.com/xzero/supervisor/issues/")
 
