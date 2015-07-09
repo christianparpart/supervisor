@@ -15,7 +15,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
-#include <sys/prctl.h>
 #include <fcntl.h>
 #include <assert.h>
 #include <getopt.h>
@@ -29,6 +28,12 @@
 #include <pwd.h>
 #include <grp.h>
 #include <algorithm>
+
+#include "sysconfig.h"
+
+#if defined(HAVE_SYS_PRCTL_H)
+#include <sys/prctl.h>
+#endif
 
 // THOUGHTS
 // - maybe, with the new getppid()+PR_SET_CHILD_SUBREAPER I do not need cgroups
@@ -298,6 +303,7 @@ bool Program::spawn() {
     logger_->info("child pid is %d", pid);
     // pidTracker_.dump("spawn");
 
+#if defined(HAVE_SYS_PRCTL_H)
     if (prctl(PR_SET_CHILD_SUBREAPER, 1) < 0) {
       logger_->info("prctl(PR_SET_CHILD_SUBREAPER) failed. %s",
                     strerror(errno));
@@ -306,6 +312,7 @@ bool Program::spawn() {
       // like, auto-restarting still works, but
       // the supervised child is forking to re-exec, that'll not work then.
     }
+#endif
     return true;
   } else {  // child
     std::vector<char*> argv;
