@@ -389,6 +389,8 @@ class Supervisor {  // {{{
   static Supervisor* self() { return self_; }
 
  private:
+  bool isExitSuccess(int code) const;
+  bool isExitSuccess() const;
   bool parseArgs(int argc, char* argv[]);
   void printVersion();
   void printHelp();
@@ -417,6 +419,7 @@ class Supervisor {  // {{{
   bool fork_;
   bool quit_;
   int exitCode_;
+  std::vector<int> successExitCodes_;
 };
 
 Supervisor* Supervisor::self_ = nullptr;
@@ -433,9 +436,11 @@ Supervisor::Supervisor()
       restartOnCrash_(false),
       fork_(false),
       quit_(false),
-      exitCode_(0) {
+      exitCode_(0),
+      successExitCodes_() {
   assert(self_ == nullptr);
   self_ = this;
+  successExitCodes_.push_back(EXIT_SUCCESS);
 }
 
 Supervisor::~Supervisor() {
@@ -460,6 +465,7 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
                           {"delay-limit", required_argument, nullptr, 'l'},
                           {"restart-on-error", no_argument, nullptr, 'e'},
                           {"restart-on-crash", no_argument, nullptr, 'c'},
+                          {"success", required_argument, nullptr, 's'},
                           {"quiet", no_argument, nullptr, 'q'},
                           //.
                           {"version", no_argument, nullptr, 'v'},
@@ -499,6 +505,13 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
       case 'c':
         restartOnCrash_ = true;
         break;
+      case 's': {
+        int code = atoi(optarg);
+        if (!isExitSuccess(code)) {
+          successExitCodes_.push_back(code);
+        }
+        break;
+      }
       case 'q':
         logLevel--;
         break;
@@ -586,6 +599,7 @@ void Supervisor::printHelp() {
       "  -e,--restart-on-error  Restart the application also on normal\n"
       "                         termination but with an exit code != 0.\n"
       "  -c,--restart-on-crash  restart application on crash (SIGSEGV)\n"
+      "  -s,--success=CODE      Adds given exit code to the success list\n"
       "  -q,--quiet             decreases verbosity level,\n"
       "                         use -qq to void runtime errors too\n"
       "  -v,--version           Prints program version number and exits\n"
@@ -632,7 +646,7 @@ int Supervisor::run(int argc, char* argv[]) {
         continue;
       }
 
-      if (exitCode_ != EXIT_SUCCESS && restartOnError_) {
+      if (!isExitSuccess() && restartOnError_) {
         logger()->info("restarting due to error code %d", exitCode_);
 
         if (restart()) continue;
@@ -669,6 +683,18 @@ int Supervisor::run(int argc, char* argv[]) {
 
     return exitCode_;
   }
+}
+
+bool Supervisor::isExitSuccess(int value) const {
+  for (int code: successExitCodes_)
+    if (value == code)
+      return true;
+
+  return false;
+}
+
+bool Supervisor::isExitSuccess() const {
+  return isExitSuccess(exitCode_);
 }
 
 bool Supervisor::restart() {
