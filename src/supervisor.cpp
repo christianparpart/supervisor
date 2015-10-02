@@ -57,6 +57,7 @@ class Logger {  // {{{
       fmt2 += fmt;
       fmt2 += "\n";
       fprintf(stderr, fmt2.c_str(), basename_.c_str(), getpid(), args...);
+      fflush(stderr);
     }
   }
 
@@ -67,6 +68,7 @@ class Logger {  // {{{
       fmt2 += fmt;
       fmt2 += "\n";
       fprintf(stdout, fmt2.c_str(), basename_.c_str(), getpid(), args...);
+      fflush(stdout);
     }
   }
 
