@@ -647,9 +647,15 @@ int Supervisor::run(int argc, char* argv[]) {
 
   for (;;) {
     int status = 0;
-    if (waitpid(program_->pid(), &status, 0) < 0) {
+    pid_t pid = waitpid(-1, &status, 0);
+    if (pid < 0) {
       perror("waitpid");
       return EXIT_FAILURE;
+    }
+
+    if (pid != program_->pid()) {
+      logger()->info("Reaping child PID %d", pid);
+      continue;
     }
 
     if (WIFEXITED(status)) {
