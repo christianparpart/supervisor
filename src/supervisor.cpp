@@ -15,7 +15,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
-#include <sys/prctl.h>
 #include <fcntl.h>
 #include <assert.h>
 #include <getopt.h>
@@ -29,6 +28,12 @@
 #include <pwd.h>
 #include <grp.h>
 #include <algorithm>
+
+#include "sysconfig.h"
+
+#if defined(HAVE_SYS_PRCTL_H)
+#include <sys/prctl.h>
+#endif
 
 // THOUGHTS
 // - maybe, with the new getppid()+PR_SET_CHILD_SUBREAPER I do not need cgroups
@@ -52,6 +57,7 @@ class Logger {  // {{{
       fmt2 += fmt;
       fmt2 += "\n";
       fprintf(stderr, fmt2.c_str(), basename_.c_str(), getpid(), args...);
+      fflush(stderr);
     }
   }
 
@@ -62,6 +68,7 @@ class Logger {  // {{{
       fmt2 += fmt;
       fmt2 += "\n";
       fprintf(stdout, fmt2.c_str(), basename_.c_str(), getpid(), args...);
+      fflush(stdout);
     }
   }
 
@@ -298,6 +305,7 @@ bool Program::spawn() {
     logger_->info("child pid is %d", pid);
     // pidTracker_.dump("spawn");
 
+#if defined(HAVE_SYS_PRCTL_H)
     if (prctl(PR_SET_CHILD_SUBREAPER, 1) < 0) {
       logger_->info("prctl(PR_SET_CHILD_SUBREAPER) failed. %s",
                     strerror(errno));
@@ -306,6 +314,7 @@ bool Program::spawn() {
       // like, auto-restarting still works, but
       // the supervised child is forking to re-exec, that'll not work then.
     }
+#endif
     return true;
   } else {  // child
     std::vector<char*> argv;
@@ -380,6 +389,8 @@ class Supervisor {  // {{{
   static Supervisor* self() { return self_; }
 
  private:
+  bool isExitSuccess(int code) const;
+  bool isExitSuccess() const;
   bool parseArgs(int argc, char* argv[]);
   void printVersion();
   void printHelp();
@@ -396,6 +407,7 @@ class Supervisor {  // {{{
   Logger logger_;
   std::unique_ptr<Program> program_;
   std::string pidfile_;
+  std::string mainPidfile_;
   std::string user_;
   std::string group_;
   int restartCount_;       //!< number of actual restarts so far
@@ -407,6 +419,7 @@ class Supervisor {  // {{{
   bool fork_;
   bool quit_;
   int exitCode_;
+  std::vector<int> successExitCodes_;
 };
 
 Supervisor* Supervisor::self_ = nullptr;
@@ -415,6 +428,7 @@ Supervisor::Supervisor()
     : logger_("supervisor", 2),
       program_(nullptr),
       pidfile_(),
+      mainPidfile_(),
       restartCount_(0),        // number of actual restarts
       restartDelay_(0),        // do not wait during restarts
       restartDelayLimit_(80),  // exponential backup delay cap
@@ -422,9 +436,11 @@ Supervisor::Supervisor()
       restartOnCrash_(false),
       fork_(false),
       quit_(false),
-      exitCode_(0) {
+      exitCode_(0),
+      successExitCodes_() {
   assert(self_ == nullptr);
   self_ = this;
+  successExitCodes_.push_back(EXIT_SUCCESS);
 }
 
 Supervisor::~Supervisor() {
@@ -443,11 +459,13 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
 
   struct option opts[] = {{"fork", no_argument, nullptr, 'f'},
                           {"pidfile", required_argument, nullptr, 'p'},
+                          {"main-pidfile", required_argument, nullptr, 'P'},
                           {"user", required_argument, nullptr, 'u'},
                           {"group", required_argument, nullptr, 'g'},
                           {"delay-limit", required_argument, nullptr, 'l'},
                           {"restart-on-error", no_argument, nullptr, 'e'},
                           {"restart-on-crash", no_argument, nullptr, 'c'},
+                          {"success", required_argument, nullptr, 's'},
                           {"quiet", no_argument, nullptr, 'q'},
                           //.
                           {"version", no_argument, nullptr, 'v'},
@@ -461,12 +479,15 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
 
   for (;;) {
     int long_index = 0;
-    switch (getopt_long(argc, argv, "fp:u:g:l:ecqvh", opts, &long_index)) {
+    switch (getopt_long(argc, argv, "fp:P:u:g:l:ecqvh", opts, &long_index)) {
       case 'f':
         fork_ = true;
         break;
       case 'p':
         pidfile_ = optarg;
+        break;
+      case 'P':
+        mainPidfile_ = optarg;
         break;
       case 'u':
         user = optarg;
@@ -484,6 +505,13 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
       case 'c':
         restartOnCrash_ = true;
         break;
+      case 's': {
+        int code = atoi(optarg);
+        if (!isExitSuccess(code)) {
+          successExitCodes_.push_back(code);
+        }
+        break;
+      }
       case 'q':
         logLevel--;
         break;
@@ -561,18 +589,21 @@ void Supervisor::printHelp() {
       "  supervisor [supervisor options] -- /path/to/app [app options ...]\n"
       "\n"
       "options:\n"
-      "  -f,--fork             fork supervisor into background\n"
-      "  -p,--pidfile=PATH     location to store the current supervisor PID\n"
-      "  -u,--user=NAME        drops application user-privileges\n"
-      "  -g,--group=NAME       drops application group-privileges\n"
-      "  -l,--delay-limit=N    maximum delay to sleep between restarts [80]\n"
-      "  -e,--restart-on-error Restart the application also on normal\n"
-      "                        termination but with an exit code != 0.\n"
-      "  -c,--restart-on-crash restart application on crash (SIGSEGV)\n"
-      "  -q,--quiet            decreases verbosity level,\n"
-      "                        use -qq to void runtime errors too\n"
-      "  -v,--version          Prints program version number and exits\n"
-      "  -h,--help             Prints this help and exits.\n"
+      "  -f,--fork              fork supervisor into background\n"
+      "  -p,--pidfile=PATH      location to store the current supervisor PID\n"
+      "  -P,--main-pidfile=PATH PID file for the main child process, used by\n"
+      "                         supervisor to know what the master PID is.\n"
+      "  -u,--user=NAME         drops application user-privileges\n"
+      "  -g,--group=NAME        drops application group-privileges\n"
+      "  -l,--delay-limit=N     maximum delay to sleep between restarts [80]\n"
+      "  -e,--restart-on-error  Restart the application also on normal\n"
+      "                         termination but with an exit code != 0.\n"
+      "  -c,--restart-on-crash  restart application on crash (SIGSEGV)\n"
+      "  -s,--success=CODE      Adds given exit code to the success list\n"
+      "  -q,--quiet             decreases verbosity level,\n"
+      "                         use -qq to void runtime errors too\n"
+      "  -v,--version           Prints program version number and exits\n"
+      "  -h,--help              Prints this help and exits.\n"
       "\n"
       "Examples:\n"
       "    supervisor -c -- /usr/sbin/x0d\n"
@@ -615,7 +646,7 @@ int Supervisor::run(int argc, char* argv[]) {
         continue;
       }
 
-      if (exitCode_ != EXIT_SUCCESS && restartOnError_) {
+      if (!isExitSuccess() && restartOnError_) {
         logger()->info("restarting due to error code %d", exitCode_);
 
         if (restart()) continue;
@@ -652,6 +683,18 @@ int Supervisor::run(int argc, char* argv[]) {
 
     return exitCode_;
   }
+}
+
+bool Supervisor::isExitSuccess(int value) const {
+  for (int code: successExitCodes_)
+    if (value == code)
+      return true;
+
+  return false;
+}
+
+bool Supervisor::isExitSuccess() const {
+  return isExitSuccess(exitCode_);
 }
 
 bool Supervisor::restart() {
