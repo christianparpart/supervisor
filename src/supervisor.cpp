@@ -283,6 +283,7 @@ bool Program::resume() {
   pidTracker_.dump("resume");
 
   if (pid_t pid = pidTracker_.findMainPID(mainPidfile_)) {
+    logger_->info("new main pid: %d", pid);
     pid_ = pid;
     return true;
   }
