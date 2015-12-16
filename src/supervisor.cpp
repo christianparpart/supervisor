@@ -86,7 +86,7 @@ class PidTracker {  // {{{
 
   void add(int pid);
   std::vector<int> collectAll();
-  int findMainPID();
+  int findMainPID(const std::string& mainPidFileHint);
 
   void dump(const char* msg);
 
@@ -186,8 +186,19 @@ static std::string getExe(pid_t pid) {
  *   <li> the main process's exe path must be matching the expected path
  * </ul>
  */
-int PidTracker::findMainPID() {
+int PidTracker::findMainPID(const std::string& mainPidFileHint) {
   std::vector<int> candidates;
+
+  if (!mainPidFileHint.empty()) {
+    std::ifstream ifs(mainPidFileHint);
+    std::string pids;
+    ifs >> pids;
+    printf("PidTracker: main-PID hint: %s\n", pids.c_str());
+    int pid = std::stoi(pids);
+    if (pid != 0) {
+      return pid;
+    }
+  }
 
   for (int pid : collectAll()) {
     if (getppid(pid) == getpid()) {
@@ -216,7 +227,7 @@ class Program {  // {{{
  public:
   Program(Logger* logger, const std::string& exe,
           const std::vector<std::string>& argv, const std::string& user,
-          const std::string& group);
+          const std::string& group, const std::string& mainPidfile);
   ~Program();
 
   bool start();
@@ -238,18 +249,21 @@ class Program {  // {{{
   std::vector<std::string> argv_;
   std::string user_;
   std::string group_;
+  std::string mainPidfile_;
   int pid_;
   PidTracker pidTracker_;
 };
 
 Program::Program(Logger* logger, const std::string& exe,
                  const std::vector<std::string>& argv, const std::string& user,
-                 const std::string& group)
+                 const std::string& group,
+                 const std::string& mainPidfile)
     : logger_(logger),
       exe_(exe),
       argv_(argv),
       user_(user),
       group_(group),
+      mainPidfile_(mainPidfile),
       pid_(0),
       pidTracker_() {
 
@@ -264,9 +278,9 @@ bool Program::start() {
 }
 
 bool Program::resume() {
-  // pidTracker_.dump("resume");
+  pidTracker_.dump("resume");
 
-  if (pid_t pid = pidTracker_.findMainPID()) {
+  if (pid_t pid = pidTracker_.findMainPID(mainPidfile_)) {
     pid_ = pid;
     return true;
   }
@@ -557,7 +571,7 @@ bool Supervisor::parseArgs(int argc, char* argv[]) {
 
         logger_.setLogLevel(logLevel);
 
-        program_.reset(new Program(logger(), args[0], args, user, group));
+        program_.reset(new Program(logger(), args[0], args, user, group, mainPidfile_));
 
         auto signals = {SIGINT,  SIGQUIT, SIGTERM, SIGCONT,
                         SIGUSR1, SIGUSR2, SIGTTIN, SIGTTOU};
