@@ -31,6 +31,8 @@
 
 #include "sysconfig.h"
 
+#define HAVE_SYS_PRCTL_H /* FIXME: why doesn't cmake find me */
+
 #if defined(HAVE_SYS_PRCTL_H)
 #include <sys/prctl.h>
 #endif
